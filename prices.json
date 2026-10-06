@@ -1,1 +1,22 @@
-{}
+{
+  "19916": {
+    "name": "En suite \u2013 Silver",
+    "price": 99.0
+  },
+  "19918": {
+    "name": "En suite \u2013 Silver Plus",
+    "price": 105.0
+  },
+  "19920": {
+    "name": "En suite \u2013 Silver Deluxe",
+    "price": 130.0
+  },
+  "19923": {
+    "name": "En suite \u2013 Gold",
+    "price": 140.0
+  },
+  "19930": {
+    "name": "En suite \u2013 Platinum",
+    "price": 180.0
+  }
+}
