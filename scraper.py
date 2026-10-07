@@ -153,6 +153,18 @@ def scrape_mezzino_api():
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
+
+
+        # --- NEW DEBUGGING LOGIC ---
+        print(f"DEBUG: Data type received is {type(data)}")
+        if isinstance(data, list) and len(data) > 0:
+            print(f"DEBUG: Top level keys: {data[0].keys()}")
+            if "acf" in data[0]:
+                print(f"DEBUG: 'acf' keys: {data[0]['acf'].keys()}")
+        else:
+            print(f"DEBUG: Raw data snippet: {str(data)[:300]}")
+        # ---------------------------
+        
         if data and isinstance(data, list):
             # Extract rooms array from WordPress API response structure
             return data[0].get("acf", {}).get("rooms", [])
@@ -166,6 +178,8 @@ if __name__ == "__main__":
     
     # 1. Scrape Belgrave View
     belgrave_rooms = scrape_mezzino_api()
+
+    print(f"DEBUG: Found {len(belgrave_rooms)} rooms.")
     
     if belgrave_rooms:
         process_and_save_prices(
