@@ -60,12 +60,15 @@ def save_current_prices(data):
 
 def compare_and_alert(current_prices, previous_prices):
     drops = []
+    raises = []
     for room_id, current_data in current_prices.items():
         name = current_data["name"]
         curr_price = current_data["price"]
         
         if room_id in previous_prices:
             prev_price = previous_prices[room_id].get("price")
+            
+            # Price Dropped
             if prev_price and curr_price < prev_price:
                 drops.append({
                     "name": name,
@@ -73,14 +76,24 @@ def compare_and_alert(current_prices, previous_prices):
                     "new_price": curr_price,
                     "saving": prev_price - curr_price
                 })
+            
+            # Price Raised
+            elif prev_price and curr_price > prev_price:
+                raises.append({
+                    "name": name,
+                    "old_price": prev_price,
+                    "new_price": curr_price,
+                    "increase": curr_price - prev_price
+                })
+                print(f"[!] Price went UP for {name}: £{prev_price} -> £{curr_price}")
     
-    if drops:
-        print(f"[*] Found {len(drops)} price drop(s). Alerting...")
-        send_discord_alert(drops)
+    if drops or raises:
+        print(f"[*] Changes detected ({len(drops)} drops, {len(raises)} raises). Alerting...")
+        send_discord_alert(drops, raises)
     else:
-        print("[*] No price drops detected in this run.")
+        print("[*] No price changes detected in this run.")
 
-def send_discord_alert(drops):
+def send_discord_alert(drops, raises):
     if not DISCORD_WEBHOOK_URL:
         print("[!] No Discord webhook configured. Skipping alert.")
         return
@@ -90,7 +103,16 @@ def send_discord_alert(drops):
         embeds.append({
             "title": f"🚨 Price Drop: {drop['name']} 🚨",
             "description": f"**Was:** £{drop['old_price']:.2f}/wk\n**Now:** £{drop['new_price']:.2f}/wk\n**Savings:** £{drop['saving']:.2f}/wk",
-            "color": 3066993, 
+            "color": 0x2ECC71,  # Green text for price drop
+            "url": "https://www.mezzino.com/property/belgrave-view/"
+        })
+
+    
+    for raise_item in raises:
+        embeds.append({
+            "title": f"📈 Price Increase: {raise_item['name']} 📈",
+            "description": f"**Was:** £{raise_item['old_price']:.2f}/wk\n**Now:** £{raise_item['new_price']:.2f}/wk\n**Increase:** +£{raise_item['increase']:.2f}/wk",
+            "color": 0xFF0000,  # Red text for price raise
             "url": "https://www.mezzino.com/property/belgrave-view/"
         })
         
@@ -112,7 +134,7 @@ def main():
     current_prices = parse_prices(api_data)
     
     if not current_prices:
-        print("[!] No valid available rooms found. Aborting save to preserve old data.")
+        print("[!] No available rooms found. Aborting save.")
         return
 
     print(f"[*] Successfully parsed {len(current_prices)} available room types.")
