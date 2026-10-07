@@ -4,7 +4,7 @@ import sqlite3
 import requests
 
 DB_NAME = "prices.db"
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK")
 
 def init_db():
     """Creates SQLite database file and tables if they do not exist."""
@@ -48,7 +48,7 @@ def get_latest_price(cursor, room_id):
 def send_discord_alert(drops, raises, property_name, property_url):
     """Sends color-coded Discord Webhook embeds for price changes."""
     if not DISCORD_WEBHOOK_URL:
-        print("[!] No DISCORD_WEBHOOK set. Skipping alert.")
+        print("[!] No Discord webhook configured. Skipping alert.")
         return
         
     embeds = []
@@ -78,7 +78,7 @@ def send_discord_alert(drops, raises, property_name, property_url):
         print(f"[!] Failed to send Discord alert: {e}")
 
 def process_and_save_prices(scraped_rooms, provider_name, property_name, property_url):
-    """Generalized function to process room data for any provider and save to SQLite."""
+    """Generalized function to process standardized room data and save to SQLite."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
@@ -86,12 +86,11 @@ def process_and_save_prices(scraped_rooms, provider_name, property_name, propert
     raises = []
     
     for item in scraped_rooms:
-        raw_id = str(item.get("id"))
-        raw_name = item.get("title", {}).get("rendered", "Unknown Room")
-        curr_price = float(item.get("price", 0))
+        raw_id = item["id"]
+        clean_name = item["name"]
+        curr_price = item["price"]
         
-        # Clean name and form composite key
-        clean_name = html.unescape(raw_name)
+        # Strip out the property name if it's included in the room title
         if property_name in clean_name:
             clean_name = clean_name.split(property_name)[-1].strip(" -:")
             
@@ -135,40 +134,43 @@ def process_and_save_prices(scraped_rooms, provider_name, property_name, propert
         print(f"[*] No price changes detected for {property_name}.")
 
 def scrape_mezzino_api():
-    """Queries Mezzino API for room data."""
-    url = "https://www.mezzino.com/wp-json/wp/v2/properties?slug=belgrave-view"
+    """Queries Mezzino API and standardizes the output."""
+    url = "https://www.mezzino.com/wp-json/room-filter/v1/rooms?property_id=19606&display_year=current_year"
     
-    # Upgraded headers to perfectly mimic a real Google Chrome browser
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "*/*",
         "Referer": "https://www.mezzino.com/property/belgrave-view/",
-        "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"'
+        "Accept-Language": "en-GB,en;q=0.9"
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         data = response.json()
-
-
-        # --- NEW DEBUGGING LOGIC ---
-        print(f"DEBUG: Data type received is {type(data)}")
-        if isinstance(data, list) and len(data) > 0:
-            print(f"DEBUG: Top level keys: {data[0].keys()}")
-            if "acf" in data[0]:
-                print(f"DEBUG: 'acf' keys: {data[0]['acf'].keys()}")
-        else:
-            print(f"DEBUG: Raw data snippet: {str(data)[:300]}")
-        # ---------------------------
         
-        if data and isinstance(data, list):
-            # Extract rooms array from WordPress API response structure
-            return data[0].get("acf", {}).get("rooms", [])
-        return []
+        standardized_rooms = []
+        
+        for room in data:
+            if room.get("availability_this_year") == "sold-out":
+                continue
+                
+            room_id = str(room.get("id"))
+            raw_title = room.get("title", f"Room {room_id}")
+            price_str = room.get("lowest_rate_current_year")
+            
+            if price_str:
+                try:
+                    standardized_rooms.append({
+                        "id": room_id,
+                        "name": html.unescape(raw_title),
+                        "price": float(price_str)
+                    })
+                except ValueError:
+                    print(f"[!] Could not parse price '{price_str}' for room {room_id}")
+                    
+        return standardized_rooms
+        
     except Exception as e:
         print(f"[!] Error fetching Mezzino API: {e}")
         return []
@@ -176,15 +178,16 @@ def scrape_mezzino_api():
 if __name__ == "__main__":
     init_db()
     
-    # 1. Scrape Belgrave View
+    print("[*] Fetching Belgrave View API data...")
     belgrave_rooms = scrape_mezzino_api()
-
-    print(f"DEBUG: Found {len(belgrave_rooms)} rooms.")
     
     if belgrave_rooms:
+        print(f"[*] Successfully parsed {len(belgrave_rooms)} available room types.")
         process_and_save_prices(
             scraped_rooms=belgrave_rooms,
             provider_name="Mezzino",
             property_name="Belgrave View",
             property_url="https://www.mezzino.com/property/belgrave-view/"
         )
+    else:
+        print("[!] No available rooms found. Aborting save.")
