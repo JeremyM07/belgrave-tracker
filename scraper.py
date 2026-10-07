@@ -1,147 +1,176 @@
 import os
-import json
-import requests
 import html
+import sqlite3
+import requests
 
-API_URL = "https://www.mezzino.com/wp-json/room-filter/v1/rooms?property_id=19606&display_year=current_year"
-DATA_FILE = "prices.json"
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK")
+DB_NAME = "prices.db"
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
-    "Accept": "*/*",
-    "Referer": "https://www.mezzino.com/property/belgrave-view/",
-    "Accept-Language": "en-GB,en;q=0.9"
-}
-
-def get_api_data():
-    try:
-        response = requests.get(API_URL, headers=HEADERS, timeout=15)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        print(f"[!] API Request failed: {e}")
-        return None
-
-def parse_prices(api_data):
-    prices = {}
-    for room in api_data:
-        if room.get("availability_this_year") == "sold-out":
-            continue
-            
-        room_id = str(room.get("id"))
-        raw_title = room.get("title", f"Room {room_id}")
-        room_name = html.unescape(raw_title)
-        price_str = room.get("lowest_rate_current_year")
-        
-        if price_str:
-            try:
-                prices[room_id] = {
-                    "name": room_name,
-                    "price": float(price_str)
-                }
-            except ValueError:
-                print(f"[!] Could not parse price '{price_str}' for room {room_id}")
-                
-    return prices
-
-def load_previous_prices():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            print("[!] JSON decode error, starting fresh.")
-    return {}
-
-def save_current_prices(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-def compare_and_alert(current_prices, previous_prices):
-    drops = []
-    raises = []
-    for room_id, current_data in current_prices.items():
-        name = current_data["name"]
-        curr_price = current_data["price"]
-        
-        if room_id in previous_prices:
-            prev_price = previous_prices[room_id].get("price")
-            
-            # Price Dropped
-            if prev_price and curr_price < prev_price:
-                drops.append({
-                    "name": name,
-                    "old_price": prev_price,
-                    "new_price": curr_price,
-                    "saving": prev_price - curr_price
-                })
-            
-            # Price Raised
-            elif prev_price and curr_price > prev_price:
-                raises.append({
-                    "name": name,
-                    "old_price": prev_price,
-                    "new_price": curr_price,
-                    "increase": curr_price - prev_price
-                })
-                print(f"[!] Price went UP for {name}: £{prev_price} -> £{curr_price}")
+def init_db():
+    """Creates SQLite database file and tables if they do not exist."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
     
-    if drops or raises:
-        print(f"[*] Changes detected ({len(drops)} drops, {len(raises)} raises). Alerting...")
-        send_discord_alert(drops, raises)
-    else:
-        print("[*] No price changes detected in this run.")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS rooms (
+            room_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            provider TEXT NOT NULL
+        );
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS prices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id TEXT NOT NULL,
+            price REAL NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (room_id) REFERENCES rooms (room_id)
+        );
+    """)
+    
+    conn.commit()
+    conn.close()
 
-def send_discord_alert(drops, raises):
+def get_latest_price(cursor, room_id):
+    """Fetches the most recent logged price for a given room_id."""
+    cursor.execute("""
+        SELECT price 
+        FROM prices 
+        WHERE room_id = ? 
+        ORDER BY timestamp DESC 
+        LIMIT 1
+    """, (room_id,))
+    
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+def send_discord_alert(drops, raises, property_name, property_url):
+    """Sends color-coded Discord Webhook embeds for price changes."""
     if not DISCORD_WEBHOOK_URL:
-        print("[!] No Discord webhook configured. Skipping alert.")
+        print("[!] No DISCORD_WEBHOOK set. Skipping alert.")
         return
         
     embeds = []
+
     for drop in drops:
         embeds.append({
-            "title": f"🚨 Price Drop: {drop['name']} 🚨",
+            "title": f"🚨 Price Drop at {property_name}: {drop['name']} 🚨",
             "description": f"**Was:** £{drop['old_price']:.2f}/wk\n**Now:** £{drop['new_price']:.2f}/wk\n**Savings:** £{drop['saving']:.2f}/wk",
-            "color": 0x2ECC71,  # Green text for price drop
-            "url": "https://www.mezzino.com/property/belgrave-view/"
+            "color": 0x2ECC71,  # Green
+            "url": property_url
         })
 
-    
     for raise_item in raises:
         embeds.append({
-            "title": f"📈 Price Increase: {raise_item['name']} 📈",
+            "title": f"📈 Price Increase at {property_name}: {raise_item['name']} 📈",
             "description": f"**Was:** £{raise_item['old_price']:.2f}/wk\n**Now:** £{raise_item['new_price']:.2f}/wk\n**Increase:** +£{raise_item['increase']:.2f}/wk",
-            "color": 0xFF0000,  # Red text for price raise
-            "url": "https://www.mezzino.com/property/belgrave-view/"
+            "color": 0xFF0000,  # Red
+            "url": property_url
         })
-        
+
     payload = {"embeds": embeds}
     try:
         r = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
         r.raise_for_status()
-        print("[+] Discord notification sent.")
+        print(f"[+] Discord alert sent for {property_name}.")
     except Exception as e:
         print(f"[!] Failed to send Discord alert: {e}")
 
-def main():
-    print("[*] Fetching Belgrave View API data...")
-    api_data = get_api_data()
+def process_and_save_prices(scraped_rooms, provider_name, property_name, property_url):
+    """Generalized function to process room data for any provider and save to SQLite."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
     
-    if not api_data:
-        return
+    drops = []
+    raises = []
+    
+    for item in scraped_rooms:
+        raw_id = str(item.get("id"))
+        raw_name = item.get("title", {}).get("rendered", "Unknown Room")
+        curr_price = float(item.get("price", 0))
+        
+        # Clean name and form composite key
+        clean_name = html.unescape(raw_name)
+        if property_name in clean_name:
+            clean_name = clean_name.split(property_name)[-1].strip(" -:")
+            
+        provider_key = provider_name.lower().replace(" ", "")
+        composite_id = f"{provider_key}_{raw_id}"
+        
+        # Register/update master room entry
+        cursor.execute("""
+            INSERT OR REPLACE INTO rooms (room_id, name, provider)
+            VALUES (?, ?, ?)
+        """, (composite_id, clean_name, provider_name))
+        
+        # Fetch baseline price
+        prev_price = get_latest_price(cursor, composite_id)
+        
+        if prev_price is not None:
+            if curr_price < prev_price:
+                drops.append({
+                    "name": clean_name, "old_price": prev_price, 
+                    "new_price": curr_price, "saving": prev_price - curr_price
+                })
+            elif curr_price > prev_price:
+                raises.append({
+                    "name": clean_name, "old_price": prev_price, 
+                    "new_price": curr_price, "increase": curr_price - prev_price
+                })
+        
+        # Insert current price timestamp row
+        cursor.execute("""
+            INSERT INTO prices (room_id, price)
+            VALUES (?, ?)
+        """, (composite_id, curr_price))
 
-    current_prices = parse_prices(api_data)
+    conn.commit()
+    conn.close()
     
-    if not current_prices:
-        print("[!] No available rooms found. Aborting save.")
-        return
+    if drops or raises:
+        print(f"[*] Price changes at {property_name} ({len(drops)} drops, {len(raises)} raises). Alerting...")
+        send_discord_alert(drops, raises, property_name, property_url)
+    else:
+        print(f"[*] No price changes detected for {property_name}.")
 
-    print(f"[*] Successfully parsed {len(current_prices)} available room types.")
+def scrape_mezzino_api():
+    """Queries Mezzino API for room data."""
+    url = "https://www.mezzino.com/wp-json/wp/v2/properties?slug=belgrave-view"
     
-    previous_prices = load_previous_prices()
-    compare_and_alert(current_prices, previous_prices)
-    save_current_prices(current_prices)
+    # Upgraded headers to perfectly mimic a real Google Chrome browser
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "Referer": "https://www.mezzino.com/property/belgrave-view/",
+        "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"'
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if data and isinstance(data, list):
+            # Extract rooms array from WordPress API response structure
+            return data[0].get("acf", {}).get("rooms", [])
+        return []
+    except Exception as e:
+        print(f"[!] Error fetching Mezzino API: {e}")
+        return []
 
 if __name__ == "__main__":
-    main()
+    init_db()
+    
+    # 1. Scrape Belgrave View
+    belgrave_rooms = scrape_mezzino_api()
+    
+    if belgrave_rooms:
+        process_and_save_prices(
+            scraped_rooms=belgrave_rooms,
+            provider_name="Mezzino",
+            property_name="Belgrave View",
+            property_url="https://www.mezzino.com/property/belgrave-view/"
+        )
