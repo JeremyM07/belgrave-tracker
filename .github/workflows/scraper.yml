@@ -29,7 +29,7 @@ jobs:
       - name: Execute Web Scraper
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        run: python scraper.py
+        run: python main.py
 
       - name: Commit and Push Updated Database
         run: |
