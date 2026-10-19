@@ -1,6 +1,8 @@
 import os
-import requests
 import html
+import re
+import requests
+from bs4 import BeautifulSoup
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK")
 
@@ -103,4 +105,73 @@ class MezzinoScraper(BaseScraper):
         except Exception as e:
             print(f"[!] Error fetching Mezzino API: {e}")
             return []
-    pass
+
+
+
+        
+class FusionStudentsScraper(BaseScraper):
+    def __init__(self, property_name, property_url, db_handler):
+        super().__init__(
+            property_name=property_name,
+            property_url=property_url,
+            provider_name="Fusion Students",
+            db_handler=db_handler
+        )
+
+    def scrape(self):
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-GB,en;q=0.9"
+        }
+
+        try:
+            response = requests.get(self.property_url, headers=headers, timeout=15)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            standardized_rooms = []
+            seen_ids = set()
+
+            # Target all top level room option blocks
+            room_blocks = soup.select(".room-option-info")
+
+            for block in room_blocks:
+                title_elem = block.find("h3")
+                price_elem = block.find("span", class_="room-option-from")
+
+                if title_elem and price_elem:
+                    room_name = title_elem.get_text(strip=True)
+                    price_text = price_elem.get_text(strip=True)
+
+                    # Extract WordPress ID ("room-modal-16378" -> "16378")
+                    modal_id = block.get("data-modalid", "")
+                    if modal_id:
+                        raw_id = modal_id.replace("room-modal-", "")
+                    else:
+                        # Fallback to name if data-modalid is absent
+                        raw_id = re.sub(r"\W+", "_", room_name.lower()).strip("_")
+
+                    # Avoid duplicate processing if room appears multiple times in HTML
+                    if raw_id in seen_ids:
+                        continue
+
+                    price_match = re.search(r"£\s*([\d\.]+)", price_text)
+                    if price_match:
+                        price_float = float(price_match.group(1))
+                        seen_ids.add(raw_id)
+
+                        standardized_rooms.append({
+                            "id": raw_id,
+                            "name": html.unescape(room_name),
+                            "price": price_float
+                        })
+
+            return standardized_rooms
+
+        except Exception as e:
+            print(f"[!] Error scraping Fusion Students: {e}")
+            return []
+
+
+
