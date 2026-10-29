@@ -6,13 +6,13 @@ An automatic, multi-property student accommodation price monitoring system built
 
 ## Key Features
 
-- Object-Oriented Architecture: Designed using OOP, its easy to plug in new accommodation providers without duplicate code.
+- OOP Architecture: Designed using OOP, its easy to plug in new accommodation providers without duplicate code.
 - Multi-Provider Scraping:
   - Mezzino (Belgrave View): REST API JSON extraction.
   - Fusion Students Birmingham: HTML DOM parsing using BeautifulSoup4 and regex for room options.
-- Relational SQLite Database: Uses contextual SQL transactions to maintain rooms and prices tables, logs price points.
+- Relational Database: Uses SQL transactions to update rooms and prices tables, logs price points.
 - Discord Alerts: Sends embedded webhooks for price drops (green) and price increases (red).
-- CI/CD Integration: Runs on a scheduled GitHub Actions workflow (scraper.yml).
+- Automation: Runs on a scheduled GitHub Actions workflow (scraper.yml).
 
 ---
 
@@ -96,7 +96,7 @@ class NewProviderScraper(BaseScraper):
         # [{"id": "unique_id", "name": "Room Name", "price": 190.00}]
         pass
 ```
-3. Register the scraper in main.py:
+2. Register the scraper in main.py:
 ```
 new_scraper = NewProviderScraper(...)
 scrapers = [mezzino, fusion, new_scraper]
